@@ -152,6 +152,15 @@ It is enabled again after a restart.
 
 ---
 
+## What the printer counts
+
+Each job is timed phase by phase (homing, heating, mesh, purge, tool
+changes, printing), the filament of every tool is measured, and tool
+changes are counted with their duration and failures. How to read that, and
+what it does and does not cover, is on the [Statistics](statistics.md) page.
+
+---
+
 ## Where to read the real thing
 
 The macros are on the printer at `/usr/data/anvil-data/config/ff-print-macros.cfg`, and
