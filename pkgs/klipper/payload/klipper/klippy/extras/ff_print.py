@@ -27,6 +27,9 @@
 #   nozzle       the first `M104`/`M109 S<t>`
 #   first tool   the first bare `Tn` -- the file's initial extruder, NOT the
 #                lowest-numbered one it uses
+#   tools        all tools named by Orca's `; filament:` header (1-based in
+#                that header), with a bare-Tn scan as fallback that gives up
+#                after SCAN_BUDGET seconds
 #   layer        the first `;HEIGHT:` -- the FIRST layer's height, which is
 #                what the print Z offset's thin-layer term wants
 #   prime tower  Orca's single resolved wipe_tower_x/y plus width/brim/rotation
@@ -47,6 +50,7 @@ import logging
 import math
 import os
 import re
+import time
 
 EXTRUDER_COUNT = 4
 
@@ -54,6 +58,12 @@ EXTRUDER_COUNT = 4
 # files, so this is a wide margin rather than a guess.
 HEAD_BYTES = 256 * 1024
 TAIL_BYTES = 256 * 1024
+
+# The fallback scan for the tools of a file without Orca's header runs line by
+# line on the thread that also keeps the heaters alive, over a file that can be
+# tens of megabytes; a stall of a few seconds with a heater on makes the MCU
+# shut down. It therefore gives up after SCAN_BUDGET seconds.
+SCAN_BUDGET = 2.0
 
 # print_stats states that mean the job is over (as opposed to paused mid-print).
 FINISHED_STATES = ('complete', 'cancelled', 'error')
@@ -93,6 +103,46 @@ def _parse_metadata(path):
                            head, re.M)
     if tool_match is not None:
         metadata['tool'] = int(tool_match.group(1))
+
+    # Orca lists every used filament/tool in its compact header.  Values are
+    # one-based there (`; filament: 1,3` means T0 and T2).  This lets the
+    # print-start macro offer an "all used colours" purge without loading the
+    # complete G-code into memory.  Older/non-Orca files fall back to a
+    # streaming scan of bare Tn commands, which stops after SCAN_BUDGET.
+    tools = []
+    filament_match = re.search(r'^;\s*filament:\s*([0-9, ]+)\s*$',
+                               head, re.M | re.I)
+    if filament_match is not None:
+        for value in filament_match.group(1).split(','):
+            try:
+                tool = int(value.strip()) - 1
+            except ValueError:
+                continue
+            if 0 <= tool < EXTRUDER_COUNT and tool not in tools:
+                tools.append(tool)
+    if not tools:
+        try:
+            deadline = time.monotonic() + SCAN_BUDGET
+            with open(path, 'rb') as fh:
+                for count, line in enumerate(fh):
+                    if count % 2000 == 0 and time.monotonic() > deadline:
+                        logging.warning(
+                            "ff_print: gave up scanning '%s' for its tools"
+                            " after %.1f s; the list may be incomplete",
+                            path, SCAN_BUDGET)
+                        break
+                    match = re.match(br'^T([0-%d])\b'
+                                     % (EXTRUDER_COUNT - 1), line)
+                    if match is not None:
+                        tool = int(match.group(1))
+                        if tool not in tools:
+                            tools.append(tool)
+        except Exception:
+            logging.exception("ff_print: cannot scan tools in '%s'", path)
+    if metadata.get('tool') is not None and metadata['tool'] not in tools:
+        tools.insert(0, metadata['tool'])
+    if tools:
+        metadata['tools'] = tools
 
     # First-layer height, from the per-layer marker the slicer emits. This
     # feeds the print Z offset's thin-layer term, which is a FIRST-layer
@@ -325,6 +375,7 @@ class FFPrint:
             'origin': self.origin,
             'active': self.active,
             'tool': self.metadata.get('tool'),
+            'tools': self.metadata.get('tools', []),
             'nozzle': self.metadata.get('nozzle'),
             'bed': self.metadata.get('bed'),
             'layer': self.metadata.get('layer'),
@@ -390,14 +441,34 @@ class FFPrint:
                                ('layer', 'LAYER', '%s')):
             if self.metadata.get(key) is not None:
                 params.append('%s=%s' % (name, fmt % (self.metadata[key],)))
+        # The tools the file uses are NOT passed on: the original's START_PRINT
+        # would then clean every one of them. A start macro that wants them
+        # reads printer.ff_print.tools.
 
-        # Let the macro raise: a refusal here must stop the print BEFORE the
-        # base command loads and resumes the file.
-        self.gcode.run_script_from_command(
-            '%s %s' % (self.before_macro, ' '.join(params)))
-        # Arm the end latch only once prepare succeeded.
-        self.active = True
-        self.previous_handlers[cmd](gcmd)
+        self._stats('note_job_prepare', path, cmd)
+        try:
+            # Let the macro raise: a refusal here must stop the print BEFORE
+            # the base command loads and resumes the file.
+            self.gcode.run_script_from_command(
+                '%s %s' % (self.before_macro, ' '.join(params)))
+            # Arm the end latch only once prepare succeeded.
+            self.active = True
+            self.previous_handlers[cmd](gcmd)
+        except Exception as err:
+            self._stats('note_job_aborted', str(err))
+            raise
+
+    def _stats(self, method, *args):
+        """Tell [ff_stats], if configured, where a job starts and ends.  The
+        statistics must never decide whether a print runs, so a failure in
+        there only reaches the log."""
+        stats = self.printer.lookup_object('ff_stats', None)
+        if stats is None:
+            return
+        try:
+            getattr(stats, method)(*args)
+        except Exception:
+            logging.exception("ff_print: ff_stats.%s failed", method)
 
     def _handle_ready(self, print_time):
         """idle_timeout:ready fires whenever the queue drains -- including a
@@ -413,6 +484,7 @@ class FFPrint:
             return
         self.active = False
         self.end_state = state
+        self._stats('note_job_ending', state)
         # Run the macro from a timer, not from this event: the handler runs in
         # the idle_timeout timeout path and should not block on a G-code script.
         self.reactor.update_timer(self.end_timer, self.reactor.NOW)
@@ -423,6 +495,7 @@ class FFPrint:
             self.gcode.run_script('%s STATE=%s' % (self.after_macro, state))
         except Exception:
             logging.exception("ff_print: %s failed", self.after_macro)
+        self._stats('note_job_finalize')
         return self.reactor.NEVER
 
 
