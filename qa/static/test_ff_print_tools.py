@@ -1,9 +1,9 @@
-"""Which tools a print file uses (N4S4).
+"""Which tools a print file uses, and which one comes second (N4S4).
 
-ff_print reads these from the file and publishes them as
-`printer.ff_print.tools`, so the print start can check and purge every colour.
-Orca names its tools in a `; filament: 1,3` header (one-based); any other file
-is scanned for bare `Tn` lines, for a bounded time.
+ff_print reads these from the file so the print start can purge every colour
+(`TOOLS=`) and heat the second colour once the mesh is done. Orca names its
+tools in a `; filament: 1,3` header (one-based); any other file is scanned for
+bare `Tn` lines.
 """
 
 import importlib.util
@@ -84,18 +84,70 @@ def test_the_scan_gives_up_when_it_takes_too_long(tmp_path, monkeypatch):
     assert metadata["tools"] == [0]            # the initial tool, nothing more
 
 
-def test_a_file_with_orcas_header_is_not_scanned(tmp_path, monkeypatch):
-    """The header is read from the head; the scan is only the fallback."""
+# ---------------------------------------------------------------- next tool
+
+def test_the_second_tool_and_its_first_target_come_from_the_file(tmp_path):
+    metadata = _parse(
+        tmp_path,
+        "M140 S60\nM104 S220\nT0\nG1 X1 Y1\nM104 S245 T2\nT2\n"
+        "M109 S245\nG1 X2 Y2\nT0\nM109 S220\n")
+
+    assert metadata["tool"] == 0
+    assert metadata["next_tool"] == 2
+    assert metadata["next_nozzle"] == 245
+
+
+def test_a_target_given_for_a_tool_that_is_not_selected_yet_counts(tmp_path):
+    metadata = _parse(
+        tmp_path, "T0\nM104 S200\nT1\nM109 T1 S235\nT0\nM109 S200\n")
+
+    assert metadata["next_tool"] == 1
+    assert metadata["next_nozzle"] == 235
+
+
+def test_the_first_non_zero_target_wins(tmp_path):
+    metadata = _parse(
+        tmp_path, "T0\nT1\nM109 S0\nM109 S230\nM109 S250\n")
+
+    assert metadata["next_nozzle"] == 230
+
+
+def test_a_second_tool_without_a_target_still_has_no_temperature(tmp_path):
+    metadata = _parse(tmp_path, "T0\nG1 X1\nT3\nG1 X2\n")
+
+    assert metadata["next_tool"] == 3
+    assert "next_nozzle" not in metadata
+
+
+def test_the_second_tool_is_found_in_the_head_of_the_file(tmp_path):
     module = _module()
-    monkeypatch.setattr(module, "SCAN_BUDGET", -1.)
-    path = tmp_path / "orca.gcode"
-    path.write_text(
-        "; filament: 1,3\nT0\nG1 X1\n" + "G1 X1 E1\n" * 50 + "T1\n",
-        encoding="utf-8")
+    filler = "G1 X1 Y1 E1\n" * (module.NEXT_TOOL_SCAN_BYTES // 2 // 12)
 
-    metadata = module._parse_metadata(str(path))
+    metadata = _parse(tmp_path, "M104 S220\nT0\n" + filler + "T1\nM109 S230\n")
 
-    assert metadata["tools"] == [0, 2]
+    assert metadata["next_tool"] == 1
+    assert metadata["next_nozzle"] == 230
+
+
+def test_a_second_tool_beyond_the_head_is_not_looked_for(tmp_path):
+    """Orca's own preheat lands in the object body by then, heating it from
+    the start would leave a hot nozzle idle, and the scan runs on the thread
+    that keeps the heaters alive."""
+    module = _module()
+    filler = "G1 X1 Y1 E1\n" * (module.NEXT_TOOL_SCAN_BYTES // 12 + 10)
+
+    metadata = _parse(tmp_path, "M104 S220\nT0\n" + filler + "T1\nM109 S230\n")
+
+    assert "next_tool" not in metadata
+    assert "next_nozzle" not in metadata
+    assert metadata["tools"] == [0, 1]         # the tool list is not bounded
+
+
+def test_a_single_colour_file_has_no_second_tool(tmp_path):
+    metadata = _parse(tmp_path, "M104 S220\nT0\nG1 X1 Y1\nT0\n")
+
+    assert "next_tool" not in metadata
+    assert "next_nozzle" not in metadata
 
 
 # ------------------------------------------------ what the macro is told
@@ -147,21 +199,11 @@ def test_a_file_without_tools_is_announced_the_same_way(tmp_path):
         "FF_BEFORE_PRINT_START ORIGIN=SDCARD_PRINT_FILE NOZZLE=220"]
 
 
-def test_the_status_reports_the_tools(tmp_path):
+def test_the_status_reports_the_tools_and_the_second_one(tmp_path):
     ff, _ = _announce(
         tmp_path, "; filament: 1,3\nM104 S220\nT0\nT2\nM109 S240\n")
 
     status = ff.get_status(0.)
 
     assert status["tools"] == [0, 2]
-
-
-def test_the_status_has_no_second_tool(tmp_path):
-    """The preheat of the file's second tool was dropped, and with it the
-    search for that tool (the original dropped both too)."""
-    ff, _ = _announce(
-        tmp_path, "; filament: 1,3\nM104 S220\nT0\nT2\nM109 S240\n")
-
-    status = ff.get_status(0.)
-
-    assert "next_tool" not in status and "next_nozzle" not in status
+    assert (status["next_tool"], status["next_nozzle"]) == (2, 240)

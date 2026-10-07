@@ -8,7 +8,8 @@ that, the other four replace the original's text and are held by a tripwire,
 so an upstream change shows up here as a failure instead of as a printer that
 ignores it.
 
-  ADAPTIVE_MESH              + PLATE= and TOOLCHANGE_PREPARE_PICKUP
+  ADAPTIVE_MESH              + PLATE=, TOOLCHANGE_PREPARE_PICKUP, and the
+                               preheat of the file's second tool
   DEFINE_PRIME_TOWER_OBJECT  + TOOLCHANGE_SET_PRIME_TOWER
   _FF_FILAMENT, _FF_NOZZLE_WIPE, _FF_NOZZLE_CLEAN, PURGE
                              replaced; the original's text is pinned below
@@ -69,7 +70,8 @@ def _printer(adaptive=1, ff_print=None):
     return {
         "gcode_macro ADAPTIVE_MESH_TOGGLE": {"enabled": adaptive},
         "gcode_macro _BUILD_PLATE_OFFSETS": dict(PLATES),
-        "ff_print": dict(ff_print or {}),
+        "ff_print": dict({"next_tool": None, "next_nozzle": None},
+                         **(ff_print or {})),
     }
 
 
@@ -129,16 +131,20 @@ def test_an_unknown_plate_code_stops_the_print_start(model):
 
 
 @pytest.mark.parametrize("model", MODELS)
-def test_the_mesh_macro_heats_no_tool_but_the_first(model):
-    """The preheat of the file's second tool was dropped (the original dropped
-    it too): the first tool's M104 is the only heating command. Orca's own
-    preheat M104 stays what heats a tool ahead of its change."""
+def test_the_second_tool_is_preheated_once_the_mesh_is_done(model):
     params = {"TOOL": "0", "NOZZLE": "230", "BED": "60", "LAYER": "0.2"}
+    file_says = {"next_tool": 2, "next_nozzle": 215}
+    cp = _parse_with_n4s4(model)
 
-    out = _render(_parse_with_n4s4(model), "ADAPTIVE_MESH", params, _printer())
+    ours = _render(cp, "ADAPTIVE_MESH", params, _printer(ff_print=file_says))
+    plain = _render(cp, "ADAPTIVE_MESH", params, _printer())
 
-    assert [c for c in out if c.startswith(("M104", "M109"))] == [
-        "M104 S230.0 T0"]
+    assert ours == plain + ["M104 S215 T2"]
+
+    # the initial tool is already heating; asking again would be noise
+    same_tool = _render(cp, "ADAPTIVE_MESH", params, _printer(
+        ff_print={"next_tool": 0, "next_nozzle": 215}))
+    assert same_tool == plain
 
 
 # ---------------------------------------------------------------------------

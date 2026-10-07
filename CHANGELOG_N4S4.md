@@ -234,9 +234,10 @@ New commands: `TOOLCHANGE_SET_PRIME_TOWER`, `TOOLCHANGE_PREPARE_PICKUP`,
   would then clean every one of those tools. `_NS_BEFORE_PRINT` reads the
   list from the status; an explicit `TOOLS=` still wins.
 - The search for the file's second tool and its first `M109` target
-  (`next_tool`, `next_nozzle`), which let `ADAPTIVE_MESH` heat that tool right
-  after the mesh, was dropped on 2026-10-06 (branch 01 has it): Orca's own
-  preheat `M104` heats a tool ahead of its change, as in the original.
+  (`printer.ff_print.next_tool`, `next_nozzle`) lets `ADAPTIVE_MESH` heat that
+  tool right after the mesh. It looks only in the first 256 KiB of the file.
+  The original dropped the same feature (`7e8ea9d`); it was dropped here on
+  2026-10-06 and put back on 2026-10-07.
 
 ### Job boundaries for statistics
 
@@ -517,12 +518,15 @@ ships `restore_axis` unset, and everything else off); these are the values
   independently of the purge mode. The `fm_exN` motion sensors remain the
   runtime clog detectors and are not treated as static presence sensors.
 - `ADAPTIVE_MESH` (the original's macro, redefined here, and only to add
-  two things; `qa/static/test_n4s4_overrides.py` compares it with the
+  three things; `qa/static/test_n4s4_overrides.py` compares it with the
   original's):
   - `PLATE=<code>`: validates the symbolic build-plate code supplied by Orca
     and passes the plate's correction from `_BUILD_PLATE_OFFSETS` on as
     `TOOLCHANGE_SET_PRINT_OFFSET PLATE=`;
-  - `TOOLCHANGE_PREPARE_PICKUP` before the first pickup.
+  - `TOOLCHANGE_PREPARE_PICKUP` before the first pickup;
+  - once the mesh is done, `M104 S<next_nozzle> T<next_tool>` for the file's
+    second tool, from `printer.ff_print` (nothing if the file has none, or if
+    it is the tool already mounted).
 - `DEFINE_PRIME_TOWER_OBJECT` (the original's macro, redefined here with one
   added line): after the original's work it registers the same corrected
   geometry with `ff_toolchange.py` (`TOOLCHANGE_SET_PRIME_TOWER`). The

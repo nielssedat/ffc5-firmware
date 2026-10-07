@@ -130,8 +130,12 @@ text, and a test pins what that text looks like.
   one of them; `_NS_BEFORE_PRINT` reads it. It feeds the checks of every print
   (`_FF_PREFLIGHT`, `_NS_FILAMENT_PREFLIGHT`) and, in purge mode `ALL`, the
   clean of every colour.
-- The preheat of the file's second tool after the mesh, which the original
-  dropped on purpose, is not part of this change either.
+- The preheat of the file's second tool after the mesh (`next_tool`,
+  `next_nozzle` from `ff_print`, used by `ADAPTIVE_MESH`) is part of this
+  change, although the original dropped it on purpose (`7e8ea9d`, no further
+  reason given). It is for files whose first colour is too short for Orca's own
+  preheat; the price is a hot idle nozzle until the first change. It stands
+  alone and can be left out without touching the rest.
 
 ### The shared extruder stepper (`ff_extruder`)
 

@@ -27,6 +27,9 @@
 #   nozzle       the first `M104`/`M109 S<t>`
 #   first tool   the first bare `Tn` -- the file's initial extruder, NOT the
 #                lowest-numbered one it uses
+#   next tool    the second distinct bare `Tn`, plus its first `M109` target,
+#                within the head of the file; this covers a preheat window
+#                which begins inside start G-code
 #   tools        all tools named by Orca's `; filament:` header (1-based in
 #                that header), with a bare-Tn scan as fallback that gives up
 #                after SCAN_BUDGET seconds
@@ -59,10 +62,15 @@ EXTRUDER_COUNT = 4
 HEAD_BYTES = 256 * 1024
 TAIL_BYTES = 256 * 1024
 
-# The fallback scan for the tools of a file without Orca's header runs line by
-# line on the thread that also keeps the heaters alive, over a file that can be
-# tens of megabytes; a stall of a few seconds with a heater on makes the MCU
-# shut down. It therefore gives up after SCAN_BUDGET seconds.
+# The two line-by-line scans below run on the thread that also keeps the
+# heaters alive, over a file that can be tens of megabytes; a stall of a few
+# seconds with a heater on makes the MCU shut down. The search for the second
+# tool therefore looks at the head of the file only, as the original's first
+# version of it did: a second colour further in is not needed from the start
+# (Orca's own preheat lands in the object body), and heating it that early
+# would only leave a hot nozzle idle. The fallback scan for the tools of a
+# file without Orca's header gives up after SCAN_BUDGET seconds.
+NEXT_TOOL_SCAN_BYTES = HEAD_BYTES
 SCAN_BUDGET = 2.0
 
 # print_stats states that mean the job is over (as opposed to paused mid-print).
@@ -143,6 +151,47 @@ def _parse_metadata(path):
         tools.insert(0, metadata['tool'])
     if tools:
         metadata['tools'] = tools
+
+    # Orca normally inserts an M104 `preheat_time` seconds before a tool is
+    # needed. If the first colour is shorter than that window, the requested
+    # start lies inside custom machine-start G-code and no early M104 can be
+    # placed in the object body. Find the second distinct tool and the M109
+    # which establishes its actual first-use target; ADAPTIVE_MESH can start
+    # that one heater after probing, just before first-layer printing begins.
+    initial_tool = metadata.get('tool')
+    if initial_tool is not None:
+        active_tool = None
+        next_tool = None
+        scanned = 0
+        try:
+            with open(path, 'rb') as fh:
+                for raw_line in fh:
+                    scanned += len(raw_line)
+                    if scanned > NEXT_TOOL_SCAN_BYTES:
+                        break
+                    line = raw_line.decode('utf-8', 'replace')
+                    select = re.match(r'^T([0-%d])\b'
+                                      % (EXTRUDER_COUNT - 1), line)
+                    if select is not None:
+                        active_tool = int(select.group(1))
+                        if active_tool != initial_tool and next_tool is None:
+                            next_tool = active_tool
+                            metadata['next_tool'] = next_tool
+                    if next_tool is None or re.match(r'^M109\b', line) is None:
+                        continue
+                    explicit = re.search(r'\bT([0-%d])\b'
+                                         % (EXTRUDER_COUNT - 1), line)
+                    target_tool = (int(explicit.group(1))
+                                   if explicit is not None else active_tool)
+                    target = re.search(r'\bS([0-9]+(?:\.[0-9]+)?)', line)
+                    if target_tool == next_tool and target is not None:
+                        temperature = float(target.group(1))
+                        if temperature > 0.:
+                            metadata['next_nozzle'] = int(temperature)
+                            break
+        except Exception:
+            logging.exception(
+                "ff_print: cannot scan next-tool preheat in '%s'", path)
 
     # First-layer height, from the per-layer marker the slicer emits. This
     # feeds the print Z offset's thin-layer term, which is a FIRST-layer
@@ -375,6 +424,8 @@ class FFPrint:
             'origin': self.origin,
             'active': self.active,
             'tool': self.metadata.get('tool'),
+            'next_tool': self.metadata.get('next_tool'),
+            'next_nozzle': self.metadata.get('next_nozzle'),
             'tools': self.metadata.get('tools', []),
             'nozzle': self.metadata.get('nozzle'),
             'bed': self.metadata.get('bed'),

@@ -143,14 +143,21 @@ homing) are the original's now.
 | Feature | What it does |
 |---|---|
 | **Every used tool is known** | `ff_print` reads Orca's compact `; filament:` header (a file without it: a streaming scan of `Tn` that gives up after 2 s) and exposes `printer.ff_print.tools`. `_NS_BEFORE_PRINT` reads it; the original's start macro does not get it, because it would clean every tool. It feeds the checks of every print (`_FF_PREFLIGHT`: each used tool installed and calibrated; `_NS_FILAMENT_PREFLIGHT`) and, in purge mode `ALL`, the clean of every colour. The original left this out on purpose. |
-| **`ADAPTIVE_MESH` additions** | `PLATE=<code>` (the build-plate correction, section 4) and `TOOLCHANGE_PREPARE_PICKUP` before the first pickup. The rest of the macro is the original's. |
+| **`ADAPTIVE_MESH` additions** | `PLATE=<code>` (the build-plate correction, section 4), `TOOLCHANGE_PREPARE_PICKUP` before the first pickup, and the preheat of the file's second tool once the mesh is done (see below). The rest of the macro is the original's. |
 | **`DEFINE_PRIME_TOWER_OBJECT` addition** | One line: the toolchanger is given the same rectangle (section 1). |
 | **Filament preflight** | `_NS_FILAMENT_PREFLIGHT` checks the `fd_exN` switch of every used tool, independent of the purge mode. |
 | **`_PURGE_NEAR_OBJECT`** | Calculates the bounds of all registered objects and prints a purge line inside the adaptively meshed area. Height, length and lead-in are chosen in the Orca machine start code by nozzle diameter (presets for 0.25, 0.40, 0.60 and 0.80 mm). Most of the material is laid down while moving, which avoids the old start blob. |
 
-The preheat of the file's second tool after the mesh, which branch 01 had and
-the original dropped, is dropped here too (decision of 2026-10-06); Orca's own
-`M104` heats a tool ahead of its change.
+**Preheat of the second tool.** Once the mesh is done, `ADAPTIVE_MESH` heats
+the file's second tool to its first target (`M104 S<next_nozzle> T<next_tool>`).
+`ff_print` finds both in the first 256 KiB of the file
+(`printer.ff_print.next_tool`, `next_nozzle`); a second tool further in is not
+looked for, because Orca's own preheat `M104` lands in the object body by
+then. The original added this and dropped it again (`7e8ea9d`, "Orca's own
+preheat is the only thing that heats a tool ahead of its change", no further
+reason). It is kept here for files whose first colour is too short for Orca's
+lead time. The price is a hot idle nozzle until the first change, as the check
+does not ask whether Orca's preheat would have been in time.
 
 The matching OrcaSlicer machine start G-code, build-plate mapping,
 adaptive-mesh switch and per-filament offsets are in
@@ -370,8 +377,9 @@ N4S4 tests at their end.
     anything else the original owns must not come back; the merged
     configuration must compile, and no macro may share a name with a command a
     module registers.
-  - `test_ff_print_tools` — the used-tool list, its bounded scan, and that
-    the start macro is not handed `TOOLS=`.
+  - `test_ff_print_tools` — the used-tool list, its bounded scan, the second
+    tool and its first target (found in the head of the file, not beyond it),
+    and that the start macro is not handed `TOOLS=`.
   - `test_ff_extruder` — the shared-stepper adapter.
   - `test_ff_stats` (49 functions) — jobs, phases, measured filament, the
     `print_stats` correction, persistence and recovery, reports, and the real

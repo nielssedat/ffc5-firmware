@@ -160,8 +160,10 @@ source of all preheat scheduling. Orca emits an early `M104` when that lead
 time fits inside printable G-code. For the first change, the requested lead
 time can begin inside machine-start G-code, where no early `M104` can be
 placed; that tool is then heated by Orca's `M104` and `M109` at the change.
-(Branch `n4s4/fixes-and-optimizations-01` heated the second tool right after
-the mesh; this branch dropped that, as the original did.)
+Besides that, `ADAPTIVE_MESH` heats the file's second tool to its first
+target right after the mesh (read from the first 256 KiB of the file by
+`ff_print`), so the first change does not wait for it when the first colour is
+shorter than the lead time. The original does not do this.
 
 ### Prime Tower geometry
 

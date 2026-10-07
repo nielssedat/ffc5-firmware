@@ -1,6 +1,6 @@
 # N4S4 and the original project: what is in main, what is still mine
 
-Status 2026-10-06. The original project is
+Status 2026-10-07. The original project is
 [Klipper4FlashForge/firmware](https://github.com/Klipper4FlashForge/firmware);
 its `master` is at `df57d27` (2026-10-03, *Remove the shared-stepper
 adapter*). In this repository
@@ -12,7 +12,7 @@ adapter*). In this repository
 | `n4s4/fixes-and-optimizations-02` | `main` plus what is still N4S4's, and nothing else |
 | `n4s4/fixes-and-optimizations-01` | untouched: the state from before the original project took anything. PR #29 is still that branch |
 
-`main` and branch 02 exist only on this machine; nothing of them is pushed.
+`main` and branch 02 were pushed to `origin` on 2026-10-07.
 
 My base was `96c0565` (2026-09-24). Six commits followed it upstream: two
 take pieces of PR #29 (`bb84772`, `308d97e`), two remove some of those pieces
@@ -25,7 +25,7 @@ again (`7e8ea9d`, `df57d27`), and two are fixes by another contributor
 |---|---|---|
 | Bed-mesh probing travel (`ff_bed_mesh`) | **taken**, byte-identical | gone |
 | `ADAPTIVE_MESH_TOGGLE`, `ADAPTIVE_MESH_STATUS` (Mainsail buttons) | **taken**, same macros | gone |
-| `ADAPTIVE_MESH` | **taken** | redefined, two additions |
+| `ADAPTIVE_MESH` | **taken** | redefined, three additions |
 | `DEFINE_PRIME_TOWER_OBJECT` | **taken** | redefined, one added line |
 | The prime tower of the active plate, read from the file (incl. Orca's automatic brim) | **taken**, identical | gone |
 | Deferred start-up, bed heats before the first homing | **taken** | gone |
@@ -33,7 +33,7 @@ again (`7e8ea9d`, `df57d27`), and two are fixes by another contributor
 | `changing` status while parking (HelixScreen) | **fixed by someone else** (#31) | gone |
 | Prime-tower-aware return, separate purge retract, no-tower prime, `protect_every_change`, the return past the docks, plate and material Z, statistics hooks | offered in #29, **not taken** | kept, off unless used |
 | Shared extruder stepper (`ff_extruder`) | taken, then **removed** (no failure had been shown) | **kept**: section 5 |
-| Preheat of the second tool | taken, then **removed** | **dropped** on 2026-10-06, as the original did: section 3 |
+| Preheat of the second tool | taken, then **removed** | **kept** (a decision of 2026-10-07): section 3 |
 | List of the tools a file uses | offered in #29, **not taken** | kept: section 3 |
 | Statistics (`ff_stats`) | offered in #29, **not taken** | kept |
 | Purge and cleaning work, Mainsail switches, timelapse, installer, `printer_n4s4.cfg` | not in #29 | kept |
@@ -49,7 +49,7 @@ branch 02 or reduced to what the original does not have.
 |---|---|---|---|
 | Bed-mesh probing travel (`ff_bed_mesh.py`, `[ff_bed_mesh]`: first move at Z 5, then 2 mm above the last trigger, Z 3 under Z 1) | `bb84772` | The file is **byte-identical** to mine; the four values are the same and now sit in `ff-print-macros.cfg`. Upstream also wrote `test_ff_bed_mesh.py` | Nothing. The copy of `[ff_bed_mesh]` in `printer_n4s4.cfg` is gone. My `[bed_mesh]` tuning (speed 300, 8 x 8, bicubic) and `[probe] samples: 1` stay, as configuration |
 | `ADAPTIVE_MESH_TOGGLE` and `ADAPTIVE_MESH_STATUS` (the Mainsail buttons: probe a new mesh or load `MESH_DATA`) | `bb84772` | The same macros and the same behaviour; only the description of one and the way a variable is read differ | Nothing; a test fails if a copy comes back |
-| `ADAPTIVE_MESH`: park, home Z, probe or load the mesh, grab the first tool, set the print offset | `bb84772` | Same flow. The original also sets the first tool's temperature (`M104`) before the pickup, which mine did not; the redefinition here has it now | A redefinition that adds two things (section 2) |
+| `ADAPTIVE_MESH`: park, home Z, probe or load the mesh, grab the first tool, set the print offset | `bb84772` | Same flow. The original also sets the first tool's temperature (`M104`) before the pickup, which mine did not; the redefinition here has it now | A redefinition that adds three things (section 2) |
 | `DEFINE_PRIME_TOWER_OBJECT`: registers Orca's real tower as an excluded object for the mesh | `bb84772` | Same flow; the original is the more careful one (it copes with a missing `X=`), and the text here is a copy of it | A redefinition with one added line (section 2) |
 | The prime tower of the active plate, read from the file: position, size, measured outline, rotation, **Orca's automatic brim (`-1`)**, as `printer.ff_print.prime_tower_*` | `bb84772` | The code in `ff_print.py` is **identical** to mine, and so is its test | Nothing |
 | Deferred start-up: `START_PRINT DEFER_MESH=1` leaves the final Z home, mesh, first pickup and offsets to the file's `ADAPTIVE_MESH`; the bed starts heating **before** the first homing | `bb84772` | Same behaviour. The original switches it on with `variable_defer_mesh: 1` on `FF_BEFORE_PRINT_START`; my `_NS_BEFORE_PRINT` passes `DEFER_MESH=1` directly, which reaches `START_PRINT` the same way | Nothing in `ff-print-macros.cfg`: the file is exactly the original's |
@@ -65,10 +65,11 @@ unhomed (`3d9f193`, #32).
 
 These are the places where `main` has the basic version and branch 02 adds to
 it. The additions to the tool change and to the two macros are **off unless
-used**; `ff_print.py` reads one more thing out of every file (the tools it
-uses), which nothing uses unless an N4S4 macro does.
+used**; `ff_print.py` reads two more things out of every file (the tools it
+uses, and its second tool with that tool's first temperature), which nothing
+uses unless an N4S4 macro does.
 
-### `ff_toolchange.py` (+431 / -22 against main)
+### `ff_toolchange.py` (+433 / -22 against main)
 
 The millimetre values are what `printer_n4s4.cfg` sets; the defaults in the
 code are zero, or the same as `restore_retract`.
@@ -97,19 +98,22 @@ too if N4S4 ever defines a seventh macro the original already has.
 
 | Macro | Added or replaced here | Guard |
 |---|---|---|
-| `ADAPTIVE_MESH` | `PLATE=<code>` (a first-layer Z correction per build plate, from `_BUILD_PLATE_OFFSETS`); `TOOLCHANGE_PREPARE_PICKUP` before the first pickup | rendered next to the original's |
+| `ADAPTIVE_MESH` | `PLATE=<code>` (a first-layer Z correction per build plate, from `_BUILD_PLATE_OFFSETS`); `TOOLCHANGE_PREPARE_PICKUP` before the first pickup; once the mesh is done, the file's second tool is heated to its first target (`M104 S<next_nozzle> T<next_tool>`, from `printer.ff_print`) | rendered next to the original's |
 | `DEFINE_PRIME_TOWER_OBJECT` | one line, `TOOLCHANGE_SET_PRIME_TOWER`, that gives the toolchanger the same rectangle | rendered next to the original's |
 | `_FF_FILAMENT` | only variables: the 150 C wipe temperature, the cooling-pad grid, the lip-wipe geometry | the original's text is pinned |
 | `_FF_NOZZLE_WIPE` | the wipe across the front silicone lip, then onto a pad position cycled through a 30-point grid | the original's text is pinned |
 | `_FF_NOZZLE_CLEAN` | one chute purge per used tool with a safe pickup and release (empty `RESTORE_AXIS`), the next tool preheated meanwhile, a 0.4 mm retract instead of 5 mm | the original's text is pinned |
 | `PURGE` | the same safe pickup and release for the manual purge | the original's text is pinned |
 
-### `ff_print.py` (+80 / -7 against main)
+### `ff_print.py` (+131 / -7 against main)
 
 * The tools a file uses, from Orca's `; filament:` header, with a scan of the
   file as fallback that gives up after 2 s (`printer.ff_print.tools`). They
   are **not** passed on to the original's start macro, which would clean every
   one of them; `_NS_BEFORE_PRINT` reads them from the status.
+* The file's second tool and its first `M109` target
+  (`printer.ff_print.next_tool`, `next_nozzle`), looked for only in the first
+  256 KiB; `ADAPTIVE_MESH` heats that tool with them.
 * The job hooks for `[ff_stats]`, which do nothing without that section.
 
 ---
@@ -117,14 +121,14 @@ too if N4S4 ever defines a seventh macro the original already has.
 ## 3. Removed or declined by the original project
 
 The original project made these choices on purpose and said so in its commit
-messages. Two of them are still kept here, each a place where branch 02 keeps
-differing from `main`; the third was dropped.
+messages. All three are still kept here, each a place where branch 02 keeps
+differing from `main`.
 
 | What | What the original said | What happened here | If you drop it |
 |---|---|---|---|
 | **The shared extruder stepper (`ff_extruder`)** | `df57d27`: it was never enabled in the original; the fork already tolerates the repeated pins (`duplicate_pin_override`), every extruder keeps its own stepper and pressure advance, and no failure on a stock configuration had been shown. It can come back if one is | **Kept: the stock design failed the test of section 5 on 2026-10-06** (T1's purge ran the wrong way) | The stock four-stepper design returns. `post_m109_macro` (the no-tower prime) goes with it |
 | **The list of used tools** | `bb84772`: left out on purpose, together with the whole-file scans behind it | **Kept.** It feeds the pre-print checks of **every** print: the original's `_FF_PREFLIGHT` (each used tool must be installed and calibrated, or the job is refused before any heating) and N4S4's `_NS_FILAMENT_PREFLIGHT` (each used tool must have filament); in purge mode `ALL` it also drives the clean of every colour. Orca's `; filament:` header sits at line 7 and is read from the head; only a file without that header is scanned, for at most 2 s | The checks would cover only the first tool, and purge mode `ALL` would fall back to it |
-| **The preheat of the second tool** after the mesh | `7e8ea9d`: Orca's own preheat `M104` is to be the only thing that heats a tool ahead of its change | **Dropped on 2026-10-06**, together with the search for that tool in `ff_print`. It would heat the file's second tool right after the mesh, without checking whether Orca's own preheat would have been too late, which costs a hot idle nozzle until the first change | Branch 01 still has it, should it turn out to be needed and worth the cost |
+| **The preheat of the second tool** after the mesh | `7e8ea9d`: Orca's own preheat `M104` is to be the only thing that heats a tool ahead of its change. No further reason is given there, and nothing else in the original's history or documentation says more | **Kept** (it was dropped for a day, on 2026-10-06, and put back on 2026-10-07). Right after the mesh, `ADAPTIVE_MESH` heats the file's second tool to its first target, so that a file whose first colour is short does not wait at the first change. The search for that tool covers only the first 256 KiB of the file. The price: it does not check whether Orca's own preheat would have been in time, so the nozzle can stand hot and idle until the first change (an oozing nozzle in a parked tool). Nothing else depends on it | Orca's preheat alone heats the second tool, as in the original. The change then waits for the temperature when Orca's lead time was too short |
 
 The same commit (`bb84772`) also left out, on purpose, the statistics hooks,
 the plate and material offsets and the tool-change travel changes. Those are
@@ -142,7 +146,7 @@ not removals; they were simply not taken (section 4).
 | Timelapse | a modified `timelapse.cfg` shipped by the `anvil-timelapse` package |
 | Installation | the boot script that adds `[include printer_n4s4.cfg]` to `printer.cfg` safely, and its linking in `anvil-link-prog.sh` |
 | HelixScreen | two printer pictures |
-| The configuration | `printer_n4s4.cfg` (about 960 lines): everything above wired together, plus the values for `[ff_toolchange]`, `[probe]` and `[bed_mesh]` |
+| The configuration | `printer_n4s4.cfg` (about 980 lines): everything above wired together, plus the values for `[ff_toolchange]`, `[probe]` and `[bed_mesh]` |
 | Documentation | `docs/statistics.md`, `docs/ssh-keys.md`, the N4S4 documents at the top level, the Orca settings in `ORCA_MACHINE_AND_FILAMENT_SETTINGS.md` |
 
 ---
@@ -340,16 +344,17 @@ which ends on the extrusion, and `ff_extruder` is what keeps that harmless.
 1. **`ff_extruder`**: run the test of section 5, and drop it if the stock
    design passes. It did not pass (2026-10-06), so it stays, and it is what is
    deployed.
-2. **The second-tool preheat**: dropped for now (if it turns out to be needed
-   and worth its cost, it is reimplemented; branch 01 has it). **The list of
-   used tools**: kept.
+2. **The second-tool preheat**: dropped on 2026-10-06 ("for now"), **put back
+   on 2026-10-07**, together with `next_tool` and `next_nozzle`. It is not on
+   the printer yet. **The list of used tools**: kept.
 3. **`protect_every_change`**: stays on, so that the pickups of the cleaning
    macros keep the raise and the in-dock retract they had on branch 01. Off
    would follow the original's reading (only a change that restores X or Y);
    the retract before a chute purge is then gone.
 4. **A pull request** from branch 02 (or a rewrite of #29, which still
    describes pieces the original now has): not now. First the printer test.
-5. **Pushing** `main` and branch 02: not now; they exist only on this machine.
+5. **Pushing** `main` and branch 02: not now on 2026-10-06; done on
+   2026-10-07, after the multicolour test.
 
 Not decided, no effect: `_NS_BEFORE_PRINT` passes `DEFER_MESH=1` directly,
 where the original's way is `variable_defer_mesh: 1`.
