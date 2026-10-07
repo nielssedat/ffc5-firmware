@@ -194,6 +194,7 @@ class _ToolTransform:
                 self.toolchange.offset_z[tool] + self.toolchange.job_z)
 
     def move(self, newpos, speed):
+        assert self.next_transform is not None
         offsets = self._offsets()
         if offsets is None:
             return self.next_transform.move(newpos, speed)
@@ -202,6 +203,7 @@ class _ToolTransform:
              newpos[2] + offsets[2]] + list(newpos[3:]), speed)
 
     def get_position(self):
+        assert self.next_transform is not None
         base = self.next_transform.get_position()
         offsets = self._offsets()
         if offsets is None:
